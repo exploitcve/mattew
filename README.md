@@ -68,7 +68,7 @@ mattew is a web reconnaissance tool that automates the tedious parts of bug boun
 ### Install from source
 
 ```bash
-git clone https://github.com/yourusername/mattew.git
+git clone https://github.com/exploitcve/mattew.git
 cd mattew
 pip install -e .
 ```
@@ -298,5 +298,5 @@ This tool is for **authorized security testing** and **bug bounty programs** onl
 
 ## Support
 
-- Issues: [GitHub Issues](https://github.com/yourusername/mattew/issues)
+- Issues: [GitHub Issues](https://github.com/exploitcve/mattew/issues)
 - Docs: [README](README.md)
