@@ -171,9 +171,10 @@ def analyze_interesting_headers(headers: dict[str, str], url: str) -> list[Findi
     findings = []
     lh = {k.lower(): v for k, v in headers.items()}
 
-    # Information disclosure
+    # ── Information disclosure ────────────────────────────────────────────
     for header in ["x-powered-by", "x-aspnet-version", "x-aspnetmvc-version",
-                    "x-debug-token", "x-generated-by", "x-runtime"]:
+                    "x-debug-token", "x-generated-by", "x-runtime",
+                    "x-aspnet-version", "x-aspnetmvc-version"]:
         if header in lh:
             findings.append(Finding(
                 type=FindingType.HEADER, url=url,
@@ -193,20 +194,97 @@ def analyze_interesting_headers(headers: dict[str, str], url: str) -> list[Findi
                 context="Server version disclosed",
             ))
 
-    # Missing security headers
-    critical_headers = {
-        "strict-transport-security": ("HSTS missing", Severity.MEDIUM),
-        "content-security-policy": ("CSP missing", Severity.MEDIUM),
-        "x-content-type-options": ("X-Content-Type-Options missing", Severity.MEDIUM),
-        "x-frame-options": ("X-Frame-Options missing (clickjacking)", Severity.LOW),
-        "referrer-policy": ("Referrer-Policy missing", Severity.LOW),
+    # ── Missing security headers (important ones) ────────────────────────
+    missing_headers = {
+        "content-security-policy": ("CSP missing — XSS possible", Severity.MEDIUM),
+        "x-content-type-options": ("X-Content-Type-Options missing — MIME sniffing", Severity.MEDIUM),
+        "strict-transport-security": ("HSTS missing — protocol downgrade", Severity.LOW),
+        "x-frame-options": ("X-Frame-Options missing — clickjacking", Severity.LOW),
+        "referrer-policy": ("Referrer-Policy missing — referrer leakage", Severity.LOW),
+        "permissions-policy": ("Permissions-Policy missing — browser features unrestricted", Severity.LOW),
+        "cross-origin-opener-policy": ("COOP missing — cross-origin attacks", Severity.LOW),
+        "cross-origin-resource-policy": ("CORP missing — cross-origin reads", Severity.LOW),
+        "cross-origin-embedder-policy": ("COEP missing — cross-origin isolation", Severity.LOW),
     }
-    for header, (desc, sev) in critical_headers.items():
+    for header, (desc, sev) in missing_headers.items():
         if header not in lh:
             findings.append(Finding(
                 type=FindingType.HEADER, url=url, value=header,
                 source="missing_header", severity=sev, context=desc,
             ))
+
+    # ── Weak header configurations ───────────────────────────────────────
+    if "strict-transport-security" in lh:
+        hsts = lh["strict-transport-security"]
+        if "max-age=0" in hsts:
+            findings.append(Finding(
+                type=FindingType.HEADER, url=url,
+                value=f"HSTS: {hsts}",
+                source="weak_header", severity=Severity.MEDIUM,
+                context="HSTS max-age=0 — effectively disabled",
+            ))
+
+    if "x-content-type-options" in lh:
+        xcto = lh["x-content-type-options"]
+        if xcto.lower() != "nosniff":
+            findings.append(Finding(
+                type=FindingType.HEADER, url=url,
+                value=f"X-Content-Type-Options: {xcto}",
+                source="weak_header", severity=Severity.MEDIUM,
+                context="X-Content-Type-Options should be 'nosniff'",
+            ))
+
+    if "x-frame-options" in lh:
+        xfo = lh["x-frame-options"]
+        if xfo.upper() == "ALLOW-FROM":
+            findings.append(Finding(
+                type=FindingType.HEADER, url=url,
+                value=f"X-Frame-Options: {xfo}",
+                source="weak_header", severity=Severity.LOW,
+                context="ALLOW-FROM is deprecated, use DENY or SAMEORIGIN",
+            ))
+
+    # ── CORS analysis ────────────────────────────────────────────────────
+    acao = lh.get("access-control-allow-origin", "")
+    if acao == "*":
+        findings.append(Finding(
+            type=FindingType.HEADER, url=url,
+            value="CORS: Access-Control-Allow-Origin: *",
+            source="cors_wildcard", severity=Severity.MEDIUM,
+            context="CORS wildcard — any origin can read responses",
+        ))
+    elif acao:
+        acac = lh.get("access-control-allow-credentials", "")
+        if acac.lower() == "true":
+            findings.append(Finding(
+                type=FindingType.HEADER, url=url,
+                value=f"CORS: {acao} + credentials",
+                source="cors_credentials", severity=Severity.HIGH,
+                context=f"CORS allows credentials — test with Origin: https://evil.com",
+            ))
+
+    # ── Cookie analysis ──────────────────────────────────────────────────
+    set_cookie = lh.get("set-cookie", "")
+    if set_cookie:
+        cookies = [c.strip() for c in set_cookie.split("\n") if c.strip()]
+        for cookie in cookies:
+            name = cookie.split("=")[0].strip()
+            lc = cookie.lower()
+            issues = []
+            if "secure" not in lc: issues.append("no Secure")
+            if "httponly" not in lc: issues.append("no HttpOnly")
+            if "samesite" not in lc: issues.append("no SameSite")
+            session_words = ["session", "sid", "token", "auth", "jwt", "sess"]
+            is_session = any(w in name.lower() for w in session_words)
+            if issues and (is_session or len(issues) >= 2):
+                findings.append(Finding(
+                    type=FindingType.HEADER, url=url,
+                    value=f"Cookie: {name} ({', '.join(issues)})",
+                    source="insecure_cookie",
+                    severity=Severity.HIGH if is_session else Severity.MEDIUM,
+                    context=f"Cookie '{name}' missing: {', '.join(issues)}",
+                ))
+    return findings
 
     # CORS analysis
     acao = lh.get("access-control-allow-origin", "")
@@ -328,8 +406,8 @@ def find_subdomain_hints(html: str, url: str) -> list[Finding]:
     seen = set()
     parsed = urlparse(url)
     base_domain = parsed.netloc
+    target_base = base_domain.split(".")[-2] if "." in base_domain else base_domain
 
-    domain_pattern = re.compile(r'https?://([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}')
     skip_domains = [
         "googleapis.com", "gstatic.com", "google.com", "google-analytics.com",
         "googletagmanager.com", "facebook.com", "facebook.net",
@@ -338,21 +416,66 @@ def find_subdomain_hints(html: str, url: str) -> list[Finding]:
         "github.com", "github.io", "githubassets.com",
         "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
         "w3.org", "schema.org", "sentry.io", "newrelic.com",
-        "fonts.googleapis.com", "fonts.gstatic.com",
+        "fonts.googleapis.com", "fonts.gstatic.com", "schema.org",
+        "apache.org", "jquery.com", "wordpress.org",
     ]
-    for match in domain_pattern.finditer(html):
+
+    # ── URLs in href/src attributes ──────────────────────────────────────
+    url_pattern = re.compile(r'https?://([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}')
+    for match in url_pattern.finditer(html):
         hostname = match.group(0).split("//")[1].split("/")[0].split("?")[0]
+        # Remove port
+        if ":" in hostname:
+            hostname = hostname.split(":")[0]
         if any(skip in hostname for skip in skip_domains):
             continue
-        target_base = base_domain.split(".")[-2] if "." in base_domain else base_domain
         if target_base in hostname and hostname != base_domain:
             if hostname not in seen:
                 seen.add(hostname)
                 findings.append(Finding(
                     type=FindingType.SUBDOMAIN, url=url, value=hostname,
                     source="html_subdomain", severity=Severity.INFO,
-                    context=f"Subdomain: {match.group(0)[:80]}",
+                    context=f"URL reference: {hostname}",
                 ))
+
+    # ── Email addresses ──────────────────────────────────────────────────
+    email_pattern = re.compile(r'@([a-zA-Z0-9][-a-zA-Z0-9]*\.)+' + re.escape(target_base) + r'\b')
+    for match in email_pattern.finditer(html):
+        domain = match.group(0)[1:]  # Remove @
+        if domain not in seen:
+            seen.add(domain)
+            findings.append(Finding(
+                type=FindingType.SUBDOMAIN, url=url, value=domain,
+                source="email_subdomain", severity=Severity.INFO,
+                context=f"Email domain: {domain}",
+            ))
+
+    # ── Comments and HTML attributes ─────────────────────────────────────
+    comment_pattern = re.compile(r'(?:<!--|-->)\s*([a-zA-Z0-9][-a-zA-Z0-9]*\.)+' + re.escape(target_base))
+    for match in comment_pattern.finditer(html):
+        hostname = re.search(r'([a-zA-Z0-9][-a-zA-Z0-9]*\.)+' + re.escape(target_base), match.group(0))
+        if hostname:
+            domain = hostname.group(0)
+            if domain not in seen:
+                seen.add(domain)
+                findings.append(Finding(
+                    type=FindingType.SUBDOMAIN, url=url, value=domain,
+                    source="comment_subdomain", severity=Severity.INFO,
+                    context=f"Comment reference: {domain}",
+                ))
+
+    # ── DNS-like references in JSON/meta ─────────────────────────────────
+    dns_pattern = re.compile(r'"([a-zA-Z0-9][-a-zA-Z0-9]*\.)+' + re.escape(target_base) + r'"')
+    for match in dns_pattern.finditer(html):
+        domain = match.group(1)
+        if domain not in seen:
+            seen.add(domain)
+            findings.append(Finding(
+                type=FindingType.SUBDOMAIN, url=url, value=domain,
+                source="json_subdomain", severity=Severity.INFO,
+                context=f"JSON/meta reference: {domain}",
+            ))
+
     return findings
 
 
