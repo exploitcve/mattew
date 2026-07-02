@@ -2,14 +2,9 @@
 
 > **Web Application Surface Mapper for Bug Bounty Hunters & Security Researchers**
 
-```
-███╗░░░███╗░█████╗░████████╗████████╗███████╗░██╗░░░░░░░██╗
-████╗░████║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝░██║░░██╗░░██║
-██╔████╔██║███████║░░░██║░░░░░░██║░░░█████╗░░░╚██╗████╗██╔╝
-██║╚██╔╝██║██╔══██║░░░██║░░░░░░██║░░░██╔══╝░░░░████╔═████║░
-██║░╚═╝░██║██║░░██║░░░██║░░░░░░██║░░░███████╗░░╚██╔╝░╚██╔╝░
-╚═╝░░░░░╚═╝╚═╝░░╚═╝░░░╚═╝░░░░░░╚═╝░░░╚══════╝░░░╚═╝░░░╚═╝░░
-```
+<img width="3420" height="1736" alt="CleanShot 2026-07-03 at 00 28 30@2x" src="https://github.com/user-attachments/assets/dc4d2938-d832-4f7f-9a11-adacce63f462" />
+
+---
 
 **mattew** crawls target websites, extracts hidden attack surface, runs security analysis, fingerprints technology, and generates professional reports , all in one command.
 
